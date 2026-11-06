@@ -1,0 +1,63 @@
+name: AutoCut release
+
+# Publica o release da ponte AutoCut quando uma tag `autocut-vX.Y.Z` e enviada
+# (ex.: autocut-v0.1.0), ou manualmente em Actions > AutoCut release > Run workflow.
+# Usa so o GITHUB_TOKEN do proprio repositorio; nao precisa de segredos.
+
+on:
+  push:
+    tags: ["autocut-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versao, ex.: 0.1.0 (a tag autocut-v<versao> e criada se nao existir)"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: autocut-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Versao
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then v="${INPUT_VERSION#v}"; else v="${REF_NAME#autocut-v}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Testes da ponte
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          python3 -m unittest discover -s integrations/autocut/tests
+
+      - name: Montar o pacote
+        run: python3 integrations/autocut/dist/build_zip.py "${{ steps.v.outputs.version }}" out
+
+      - name: Publicar o release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          tag="autocut-v${VERSION}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "O release $tag ja existe; nada a fazer."; exit 1
+          fi
+          gh release create "$tag" "out/autocut-filmcraft-v${VERSION}.zip" \
+            --target "${{ github.sha }}" \
+            --title "AutoCut para o FilmCraft v${VERSION}" \
+            --notes-file out/release-notes.md
